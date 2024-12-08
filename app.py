@@ -20,11 +20,19 @@ engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
+class NodeRegistration(BaseModel):
+    device_uuid: str  # Unique identifier from the device
+    device_name: str | None = None
+    device_model: str | None = None
+
 # Database Models
 class Node(Base):
     __tablename__ = "nodes"
     
     node_id = Column(String, primary_key=True)
+    device_uuid = Column(String, unique=True)  # Add unique constraint
+    device_name = Column(String, nullable=True)
+    device_model = Column(String, nullable=True)
     status = Column(String)  # available, busy
     current_model_id = Column(String, nullable=True)
     last_heartbeat = Column(DateTime)
@@ -62,19 +70,42 @@ class NodeResponse(BaseModel):
     current_model_id: str | None
 
 @app.post("/nodes/register")
-async def register_node(db: Session = Depends(get_db)):
+async def register_node(registration: NodeRegistration, db: Session = Depends(get_db)):
     """Register a new iPhone node"""
+    # Check if device already exists
+    existing_node = db.query(Node)\
+        .filter(Node.device_uuid == registration.device_uuid)\
+        .first()
+    
+    if existing_node:
+        # Update last heartbeat and return existing node_id
+        existing_node.last_heartbeat = datetime.utcnow()
+        existing_node.status = "available"  # Reset status to available
+        db.commit()
+        return {"node_id": existing_node.node_id, "status": "already_registered"}
+    
+    # Create new node if device doesn't exist
     node_id = str(uuid.uuid4())
     db_node = Node(
         node_id=node_id,
+        device_uuid=registration.device_uuid,
+        device_name=registration.device_name,
+        device_model=registration.device_model,
         status="available",
         last_heartbeat=datetime.utcnow()
     )
+    
     db.add(db_node)
     db.commit()
     db.refresh(db_node)
-    return {"node_id": node_id}
-
+    
+    return {
+        "node_id": node_id,
+        "status": "new_registration",
+        "device_uuid": registration.device_uuid,
+        "device_model": registration.device_model,
+        "device_name": registration.device_name
+    }
 @app.post("/models/upload")
 async def upload_model(
     model_file: UploadFile,

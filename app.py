@@ -132,13 +132,9 @@ async def upload_model(
         model_id=model_id,
         model_data=model_data,
         filename=model_file.filename,
-        status="deployed",
+        status="deployed",  # Will be changed to "downloaded" when node gets it
         node_id=available_node.node_id
     )
-    
-    # Update node status
-    available_node.status = "busy"
-    available_node.current_model_id = model_id
     
     db.add(db_model)
     db.commit()
@@ -146,9 +142,9 @@ async def upload_model(
     return {
         "model_id": model_id,
         "node_id": available_node.node_id,
-        "download_url": f"/models/{model_id}/download"
+        "status": "assigned"
     }
-
+    
 @app.get("/models/{model_id}/download")
 async def get_model(model_id: str, db: Session = Depends(get_db)):
     """Download model directly from database"""
@@ -201,3 +197,43 @@ async def get_available_nodes(db: Session = Depends(get_db)):
             status_code=500,
             detail=f"Database error: {str(e)}"
         )
+
+@app.get("/nodes/{node_id}/check_assignment")
+async def check_node_assignment(node_id: str, db: Session = Depends(get_db)):
+    """Check if there's a model assigned to this node"""
+    
+    # Update heartbeat and get node
+    node = db.query(Node).filter(Node.node_id == node_id).first()
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+    
+    # Update heartbeat
+    node.last_heartbeat = datetime.utcnow()
+    db.commit()
+    
+    # Check if there's an assigned model that hasn't been downloaded
+    assigned_model = db.query(Model)\
+        .filter(Model.node_id == node_id)\
+        .filter(Model.status == "deployed")\
+        .first()
+    
+    if not assigned_model:
+        return {"status": "no_model"}
+    
+    return {
+        "status": "model_ready",
+        "model_id": assigned_model.model_id,
+        "download_url": f"/models/{assigned_model.model_id}/download"
+    }
+
+@app.post("/models/{model_id}/downloaded")
+async def mark_model_downloaded(model_id: str, node_id: str, db: Session = Depends(get_db)):
+    """Mark a model as successfully downloaded"""
+    model = db.query(Model).filter(Model.model_id == model_id).first()
+    if not model:
+        raise HTTPException(status_code=404, detail="Model not found")
+    
+    model.status = "downloaded"
+    db.commit()
+    
+    return {"status": "success"}

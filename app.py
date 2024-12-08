@@ -178,8 +178,26 @@ async def node_heartbeat(node_id: str, db: Session = Depends(get_db)):
 @app.get("/nodes/available")
 async def get_available_nodes(db: Session = Depends(get_db)):
     """Get list of available nodes"""
-    nodes = db.query(Node)\
-        .filter(Node.status == "available")\
-        .filter(Node.last_heartbeat >= datetime.utcnow().timestamp() - 300)\
-        .all()
-    return {"nodes": nodes}
+    try:
+        five_minutes_ago = datetime.utcnow() - timedelta(minutes=5)
+        nodes = db.query(Node)\
+            .filter(Node.status == "available")\
+            .filter(Node.last_heartbeat >= five_minutes_ago)\
+            .all()
+        
+        return {
+            "nodes": [
+                {
+                    "node_id": node.node_id,
+                    "device_name": node.device_name,
+                    "device_model": node.device_model,
+                    "status": node.status,
+                    "last_heartbeat": node.last_heartbeat
+                } for node in nodes
+            ]
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Database error: {str(e)}"
+        )

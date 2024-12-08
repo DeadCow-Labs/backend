@@ -1,0 +1,9 @@
+.env
+*.pyc
+*.db
+*.db-shm
+*.db-wal
+venv/
+pycache/
+dummy_model.pth
+create_test_model.py

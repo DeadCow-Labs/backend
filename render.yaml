@@ -3,12 +3,14 @@ services:
     name: mlnodes-api
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    startCommand: gunicorn -c gunicorn_config.py app:app
     envVars:
       - key: DATABASE_URL
         fromDatabase:
           name: mlnodes-db
           property: connectionString
+      - key: ENVIRONMENT
+        value: production
 
 databases:
   - name: mlnodes-db

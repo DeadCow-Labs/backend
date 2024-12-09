@@ -4,4 +4,7 @@ sqlalchemy
 psycopg2-binary
 python-multipart
 python-dotenv
-gunicorn 
+gunicorn
+fastapi-cors
+pydantic
+asyncio

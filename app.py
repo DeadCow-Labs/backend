@@ -11,10 +11,21 @@ from dotenv import load_dotenv
 from fastapi.responses import Response
 import json
 import asyncio
+from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
 app = FastAPI()
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],  # Add your frontend URL
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
+
 
 # Database setup
 DATABASE_URL = os.getenv("DATABASE_URL")

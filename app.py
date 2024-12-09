@@ -6,7 +6,7 @@ import uuid
 import os
 import time
 from datetime import datetime, timedelta  # Added timedelta here
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from fastapi.responses import Response
 
@@ -24,6 +24,23 @@ class NodeRegistration(BaseModel):
     device_uuid: str  # Unique identifier from the device
     device_name: str | None = None
     device_model: str | None = None
+
+class InferenceRequest(Base):
+    __tablename__ = "inference_requests"
+    
+    request_id = Column(String, primary_key=True)
+    model_id = Column(String, ForeignKey("models.model_id"))
+    node_id = Column(String, ForeignKey("nodes.node_id"))
+    input_data = Column(LargeBinary)
+    status = Column(String)  # pending, processing, completed, failed
+    result = Column(LargeBinary, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+class TextInferenceRequest(BaseModel):
+    prompt: str = Field(..., min_length=1, max_length=1000)
+    temperature: float = Field(default=0.7, ge=0, le=1)
+    max_tokens: int = Field(default=100, ge=1, le=1000)
 
 # Database Models
 class Node(Base):
@@ -237,3 +254,79 @@ async def mark_model_downloaded(model_id: str, node_id: str, db: Session = Depen
     db.commit()
     
     return {"status": "success"}
+
+@app.post("/models/{model_id}/text", 
+          description="Text-to-text inference endpoint for language models",
+          response_model=dict)
+async def run_text_inference(
+    model_id: str,
+    request: TextInferenceRequest,
+    db: Session = Depends(get_db)
+):
+    """Run text-to-text inference on a language model"""
+    # Find model and its node
+    model = db.query(Model).filter(Model.model_id == model_id).first()
+    if not model or not model.node_id:
+        raise HTTPException(status_code=404, detail="Model not found or not assigned to node")
+    
+    # Check if node is available
+    node = db.query(Node).filter(Node.node_id == model.node_id).first()
+    if not node or node.status != "available":
+        raise HTTPException(status_code=503, detail="Node not available")
+    
+    try:
+        # Create inference request
+        request_id = str(uuid.uuid4())
+        inference_request = InferenceRequest(
+            request_id=request_id,
+            model_id=model_id,
+            node_id=node.node_id,
+            input_data=json.dumps({
+                "prompt": request.prompt,
+                "temperature": request.temperature,
+                "max_tokens": request.max_tokens
+            }).encode(),
+            status="pending"
+        )
+        
+        # Mark node as busy
+        node.status = "busy"
+        db.add(inference_request)
+        db.commit()
+        
+        # Wait for result (with timeout)
+        start_time = time.time()
+        while time.time() - start_time < 30:  # 30 second timeout
+            db.refresh(inference_request)
+            if inference_request.status == "completed":
+                return {
+                    "text": inference_request.result.decode(),
+                    "model_id": model_id,
+                    "node_id": node.node_id,
+                    "request_id": request_id,
+                    "prompt_tokens": len(request.prompt.split()),
+                    "completion_tokens": len(inference_request.result.decode().split()),
+                    "total_tokens": len(request.prompt.split()) + len(inference_request.result.decode().split())
+                }
+            elif inference_request.status == "failed":
+                raise HTTPException(
+                    status_code=500, 
+                    detail="Text generation failed"
+                )
+            
+            await asyncio.sleep(0.5)
+        
+        # If we get here, it timed out
+        raise HTTPException(
+            status_code=504, 
+            detail="Text generation timeout"
+        )
+            
+    except Exception as e:
+        # Make sure to reset node status on error
+        node.status = "available"
+        db.commit()
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Text generation error: {str(e)}"
+        )

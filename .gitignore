@@ -7,3 +7,5 @@ venv/
 pycache/
 dummy_model.pth
 create_test_model.py
+.DS_Store
+*.pth

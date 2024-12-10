@@ -18,6 +18,7 @@ load_dotenv()
 
 app = FastAPI()
 
+PORT = int(os.getenv("PORT", 10000))
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,

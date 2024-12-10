@@ -3,14 +3,16 @@ services:
     name: mlnodes-api
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --workers 4 --timeout 300 --max-requests 100 --max-requests-jitter 10
+    startCommand: gunicorn app:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT
     envVars:
-      - key: MAX_CONTENT_LENGTH
-        value: 500000000  # 500MB in bytes
       - key: DATABASE_URL
         fromDatabase:
           name: mlnodes-db
           property: connectionString
+      - key: MAX_CONTENT_LENGTH
+        value: 500000000  # 500MB in bytes
+      - key: POSTGRES_SSLMODE
+        value: require
       - key: ENVIRONMENT
         value: production
     autoDeploy: false

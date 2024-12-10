@@ -1,6 +1,7 @@
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Depends
 from sqlalchemy import create_engine, Column, String, Float, DateTime, ForeignKey, LargeBinary
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from typing import List
 import uuid
 import os
@@ -99,6 +100,30 @@ def get_db():
     finally:
         db.close()
 
+def handle_db_error(func):
+    async def wrapper(*args, **kwargs):
+        try:
+            return await func(*args, **kwargs)
+        except OperationalError as e:
+            print(f"Database operational error: {str(e)}")
+            raise HTTPException(
+                status_code=503,
+                detail="Database connection error. Please try again later."
+            )
+        except SQLAlchemyError as e:
+            print(f"Database error: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail="Database error occurred."
+            )
+        except Exception as e:
+            print(f"Unexpected error: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail="An unexpected error occurred."
+            )
+    return wrapper
+
 # Pydantic models
 class NodeCreate(BaseModel):
     node_id: str
@@ -148,6 +173,7 @@ async def register_node(registration: NodeRegistration, db: Session = Depends(ge
         "device_name": registration.device_name
     }
 @app.post("/models/upload")
+@handle_db_error
 async def upload_model(
     model_file: UploadFile = File(...),
     name: str = Form(...),
@@ -229,6 +255,7 @@ async def node_heartbeat(node_id: str, db: Session = Depends(get_db)):
     return {"status": "ok"}
 
 @app.get("/nodes/available")
+@handle_db_error
 async def get_available_nodes(db: Session = Depends(get_db)):
     """Get list of available nodes"""
     try:

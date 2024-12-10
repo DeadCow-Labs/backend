@@ -68,14 +68,25 @@ class Node(Base):
     last_heartbeat = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+class ModelResponse(BaseModel):
+    model_id: str
+    name: str
+    filename: str
+    status: str
+    node_id: str | None
+    owner_address: str
+    created_at: datetime
+
 class Model(Base):
     __tablename__ = "models"
     
     model_id = Column(String, primary_key=True)
     model_data = Column(LargeBinary)  # Store model binary directly in DB
+    name = Column(String, nullable=False)
     filename = Column(String)
     status = Column(String)  # uploaded, deployed, failed
     node_id = Column(String, ForeignKey("nodes.node_id"), nullable=True)
+    owner_address = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 Base.metadata.create_all(bind=engine)
@@ -139,6 +150,8 @@ async def register_node(registration: NodeRegistration, db: Session = Depends(ge
 @app.post("/models/upload")
 async def upload_model(
     model_file: UploadFile,
+    name: str,
+    owner_address: str,
     db: Session = Depends(get_db)
 ):
     """Handle model upload and distribution"""
@@ -160,10 +173,12 @@ async def upload_model(
     # Create model record
     db_model = Model(
         model_id=model_id,
+        name=name,
         model_data=model_data,
         filename=model_file.filename,
         status="deployed",  # Will be changed to "downloaded" when node gets it
-        node_id=available_node.node_id
+        node_id=available_node.node_id,
+        owner_address=owner_address
     )
     
     db.add(db_model)
@@ -171,10 +186,22 @@ async def upload_model(
     
     return {
         "model_id": model_id,
+        "name": name,
         "node_id": available_node.node_id,
-        "status": "assigned"
+        "status": "assigned",
+        "owner_address": owner_address
     }
+
+@app.get("/models/owner/{owner_address}", response_model=List[ModelResponse])
+async def get_owner_models(owner_address: str, db: Session = Depends(get_db)):
+    """Get all models owned by a specific address"""
+    models = db.query(Model)\
+        .filter(Model.owner_address == owner_address)\
+        .order_by(Model.created_at.desc())\
+        .all()
     
+    return models
+
 @app.get("/models/{model_id}/download")
 async def get_model(model_id: str, db: Session = Depends(get_db)):
     """Download model directly from database"""
@@ -274,13 +301,27 @@ async def mark_model_downloaded(model_id: str, node_id: str, db: Session = Depen
 async def run_text_inference(
     model_id: str,
     request: TextInferenceRequest,
+    owner_address: str,
     db: Session = Depends(get_db)
 ):
     """Run text-to-text inference on a language model"""
     # Find model and its node
-    model = db.query(Model).filter(Model.model_id == model_id).first()
-    if not model or not model.node_id:
-        raise HTTPException(status_code=404, detail="Model not found or not assigned to node")
+    model = db.query(Model)\
+        .filter(Model.model_id == model_id)\
+        .filter(Model.owner_address == owner_address)\
+        .first()
+    
+    if not model:
+        raise HTTPException(
+            status_code=404, 
+            detail="Model not found or you don't have access to it"
+        )
+
+    if not model.node_id:
+        raise HTTPException(
+            status_code=404, 
+            detail="Model not assigned to any node"
+        )
     
     # Check if node is available
     node = db.query(Node).filter(Node.node_id == model.node_id).first()

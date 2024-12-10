@@ -66,6 +66,40 @@ class NodeRegistration(BaseModel):
     device_name: str | None = None
     device_model: str | None = None
 
+class NodeInfo(BaseModel):
+    node_id: str
+    device_uuid: str
+    device_name: Optional[str] = None
+    device_model: Optional[str] = None
+    status: str
+    current_model_id: Optional[str] = None
+    last_heartbeat: datetime
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ModelInfo(BaseModel):
+    model_id: str
+    name: str
+    filename: str
+    status: str
+    node_id: Optional[str] = None
+    owner_address: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class NodesResponse(BaseModel):
+    nodes: List[NodeInfo]
+
+    class Config:
+        from_attributes = True
+
+
 class InferenceRequest(Base):
     __tablename__ = "inference_requests"
     
@@ -104,6 +138,14 @@ class ModelResponse(BaseModel):
     node_id: str | None
     owner_address: str
     created_at: datetime
+
+class ModelUploadResponse(BaseModel):
+    model_id: str
+    name: str
+    node_id: str
+    status: str
+    owner_address: str
+
 
 class Model(Base):
     __tablename__ = "models"
@@ -179,9 +221,18 @@ class NodeRegistration(BaseModel):
     device_name: Optional[str] = None
     device_model: Optional[str] = None
 
-@app.post("/nodes/register")
+class RegistrationResponse(BaseModel):
+    node_id: str
+    status: str
+    device_uuid: str
+    device_name: Optional[str] = None
+    device_model: Optional[str] = None
+
+
+@app.post("/nodes/register", response_model=RegistrationResponse)
+@handle_db_error
 async def register_node(registration: NodeRegistration, db: Session = Depends(get_db)):
-    """Register a new iPhone node"""
+    """Register a new node"""
     try:
         print(f"Checking for existing device: {registration.device_uuid}")
         
@@ -199,13 +250,13 @@ async def register_node(registration: NodeRegistration, db: Session = Depends(ge
             existing_node.device_model = registration.device_model  # Update model if changed
             db.commit()
             
-            return {
-                "node_id": existing_node.node_id,
-                "status": "already_registered",
-                "device_uuid": existing_node.device_uuid,
-                "device_name": existing_node.device_name,
-                "device_model": existing_node.device_model
-            }
+            return RegistrationResponse(
+                node_id=existing_node.node_id,
+                status="already_registered",
+                device_uuid=existing_node.device_uuid,
+                device_name=existing_node.device_name,
+                device_model=existing_node.device_model
+            )
         
         # If no existing node, create new one
         node_id = str(uuid.uuid4())
@@ -225,13 +276,13 @@ async def register_node(registration: NodeRegistration, db: Session = Depends(ge
             db.commit()
             print(f"Successfully created node: {node_id}")
             
-            return {
-                "node_id": node_id,
-                "status": "registered",
-                "device_uuid": registration.device_uuid,
-                "device_name": registration.device_name,
-                "device_model": registration.device_model
-            }
+            return RegistrationResponse(
+                node_id=node_id,
+                status="registered",
+                device_uuid=registration.device_uuid,
+                device_name=registration.device_name,
+                device_model=registration.device_model
+            )
             
         except Exception as e:
             print(f"Error creating node: {str(e)}")
@@ -261,7 +312,7 @@ async def register_node(registration: NodeRegistration, db: Session = Depends(ge
             detail=f"Registration failed: {str(e)}"
         )
     
-@app.post("/models/upload")
+@app.post("/models/upload", response_model=ModelUploadResponse)
 @handle_db_error
 async def upload_model(
     model_file: UploadFile = File(...),
@@ -299,15 +350,16 @@ async def upload_model(
     db.add(db_model)
     db.commit()
     
-    return {
-        "model_id": model_id,
-        "name": name,
-        "node_id": available_node.node_id,
-        "status": "assigned",
-        "owner_address": owner_address
-    }
+    return ModelUploadResponse(
+        model_id=model_id,
+        name=name,
+        node_id=available_node.node_id,
+        status="assigned",
+        owner_address=owner_address
+    )
 
-@app.get("/models/owner/{owner_address}", response_model=List[ModelResponse])
+@app.get("/models/owner/{owner_address}", response_model=List[ModelInfo])
+@handle_db_error
 async def get_owner_models(owner_address: str, db: Session = Depends(get_db)):
     """Get all models owned by a specific address"""
     models = db.query(Model)\
@@ -333,6 +385,7 @@ async def get_model(model_id: str, db: Session = Depends(get_db)):
     )
 
 @app.post("/nodes/{node_id}/heartbeat")
+@handle_db_error
 async def node_heartbeat(node_id: str, db: Session = Depends(get_db)):
     """Handle node heartbeat"""
     node = db.query(Node).filter(Node.node_id == node_id).first()
@@ -343,30 +396,22 @@ async def node_heartbeat(node_id: str, db: Session = Depends(get_db)):
     db.commit()
     return {"status": "ok"}
 
-@app.get("/nodes/available", response_model=NodeListResponse)
+@app.get("/nodes/available", response_model=NodesResponse)
 @handle_db_error
 async def get_available_nodes(db: Session = Depends(get_db)):
     """Get list of available nodes"""
-    try:
-        five_minutes_ago = datetime.utcnow() - timedelta(minutes=5)
-        nodes = db.query(Node)\
-            .filter(Node.status == "available")\
-            .filter(Node.last_heartbeat >= five_minutes_ago)\
-            .all()
-        
-        node_responses = [NodeResponse.from_orm(node) for node in nodes]
-        return NodeListResponse(nodes=node_responses)
+    five_minutes_ago = datetime.utcnow() - timedelta(minutes=5)
+    nodes = db.query(Node)\
+        .filter(Node.status == "available")\
+        .filter(Node.last_heartbeat >= five_minutes_ago)\
+        .all()
     
-    except Exception as e:
-        print(f"Error in get_available_nodes: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Database error: {str(e)}"
-        )
+    return NodesResponse(nodes=nodes)
 
 @app.get("/nodes/{node_id}/check_assignment")
+@handle_db_error
 async def check_node_assignment(node_id: str, db: Session = Depends(get_db)):
-    """Check if there's a model assigned to this node"""
+    """Check node assignment"""
     
     # Update heartbeat and get node
     node = db.query(Node).filter(Node.node_id == node_id).first()

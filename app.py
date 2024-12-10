@@ -146,6 +146,13 @@ class ModelUploadResponse(BaseModel):
     status: str
     owner_address: str
 
+class NoModelResponse(BaseModel):
+    status: str = "no_model"
+
+class ModelReadyResponse(BaseModel):
+    status: str = "model_ready"
+    model_id: str
+    download_url: str
 
 class Model(Base):
     __tablename__ = "models"
@@ -406,7 +413,9 @@ async def get_available_nodes(db: Session = Depends(get_db)):
         .filter(Node.last_heartbeat >= five_minutes_ago)\
         .all()
     
-    return NodesResponse(nodes=nodes)
+    return NodesResponse(nodes=[
+            NodeInfo.from_orm(node) for node in nodes
+        ])
 
 @app.get("/nodes/{node_id}/check_assignment")
 @handle_db_error
@@ -429,13 +438,12 @@ async def check_node_assignment(node_id: str, db: Session = Depends(get_db)):
         .first()
     
     if not assigned_model:
-        return {"status": "no_model"}
+        return NoModelResponse()
     
-    return {
-        "status": "model_ready",
-        "model_id": assigned_model.model_id,
-        "download_url": f"/models/{assigned_model.model_id}/download"
-    }
+    return ModelReadyResponse(
+            model_id=assigned_model.model_id,
+            download_url=f"/models/{assigned_model.model_id}/download"
+    )
 
 @app.post("/models/{model_id}/downloaded")
 async def mark_model_downloaded(model_id: str, node_id: str, db: Session = Depends(get_db)):

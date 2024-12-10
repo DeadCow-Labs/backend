@@ -2,7 +2,7 @@ from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Depends
 from sqlalchemy import create_engine, Column, String, Float, DateTime, ForeignKey, LargeBinary
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
-from typing import List
+from typing import List, Optional
 import uuid
 import os
 import time
@@ -131,9 +131,10 @@ class NodeCreate(BaseModel):
     current_model_id: str | None = None
 
 class NodeResponse(BaseModel):
-    node_id: str
-    status: str
-    current_model_id: str | None
+    nodes: List[Node]
+
+    class Config:
+        from_attributes = True
 
 @app.post("/nodes/register")
 async def register_node(registration: NodeRegistration, db: Session = Depends(get_db)):
@@ -254,7 +255,7 @@ async def node_heartbeat(node_id: str, db: Session = Depends(get_db)):
     db.commit()
     return {"status": "ok"}
 
-@app.get("/nodes/available")
+@app.get("/nodes/available", response_model=NodeResponse)
 @handle_db_error
 async def get_available_nodes(db: Session = Depends(get_db)):
     """Get list of available nodes"""
@@ -265,17 +266,8 @@ async def get_available_nodes(db: Session = Depends(get_db)):
             .filter(Node.last_heartbeat >= five_minutes_ago)\
             .all()
         
-        return {
-            "nodes": [
-                {
-                    "node_id": node.node_id,
-                    "device_name": node.device_name,
-                    "device_model": node.device_model,
-                    "status": node.status,
-                    "last_heartbeat": node.last_heartbeat
-                } for node in nodes
-            ]
-        }
+        return NodeResponse(nodes=nodes)
+    
     except Exception as e:
         raise HTTPException(
             status_code=500,

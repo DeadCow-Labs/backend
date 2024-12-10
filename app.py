@@ -180,33 +180,37 @@ class NodeRegistration(BaseModel):
     device_model: Optional[str] = None
 
 @app.post("/nodes/register")
-async def register_node(
-    registration: NodeRegistration,  # This expects JSON in request body
-    db: Session = Depends(get_db)
-):
+async def register_node(registration: NodeRegistration, db: Session = Depends(get_db)):
     """Register a new iPhone node"""
     try:
-        print(f"Received registration: {registration}")
+        print(f"Checking for existing device: {registration.device_uuid}")
         
-        # Check if device exists
+        # First try to find existing node
         existing_node = db.query(Node)\
             .filter(Node.device_uuid == registration.device_uuid)\
             .first()
         
         if existing_node:
             print(f"Found existing node: {existing_node.node_id}")
+            # Update existing node
             existing_node.last_heartbeat = datetime.utcnow()
             existing_node.status = "available"
+            existing_node.device_name = registration.device_name  # Update name if changed
+            existing_node.device_model = registration.device_model  # Update model if changed
             db.commit()
             
             return {
                 "node_id": existing_node.node_id,
-                "status": "already_registered"
+                "status": "already_registered",
+                "device_uuid": existing_node.device_uuid,
+                "device_name": existing_node.device_name,
+                "device_model": existing_node.device_model
             }
         
-        # Create new node
+        # If no existing node, create new one
         node_id = str(uuid.uuid4())
         print(f"Creating new node: {node_id}")
+        
         new_node = Node(
             node_id=node_id,
             device_uuid=registration.device_uuid,
@@ -216,18 +220,42 @@ async def register_node(
             last_heartbeat=datetime.utcnow()
         )
         
-        db.add(new_node)
-        db.commit()
-        print(f"Successfully created node: {node_id}")
-
-        return {
-            "node_id": node_id,
-            "status": "registered"
-        }
-        
+        try:
+            db.add(new_node)
+            db.commit()
+            print(f"Successfully created node: {node_id}")
+            
+            return {
+                "node_id": node_id,
+                "status": "registered",
+                "device_uuid": registration.device_uuid,
+                "device_name": registration.device_name,
+                "device_model": registration.device_model
+            }
+            
+        except Exception as e:
+            print(f"Error creating node: {str(e)}")
+            db.rollback()
+            raise
+            
     except Exception as e:
         print(f"Registration error: {str(e)}")
         db.rollback()
+        # Check if it's a unique violation
+        if "UniqueViolation" in str(e):
+            # Try one more time to get the existing node
+            existing_node = db.query(Node)\
+                .filter(Node.device_uuid == registration.device_uuid)\
+                .first()
+            if existing_node:
+                return {
+                    "node_id": existing_node.node_id,
+                    "status": "already_registered",
+                    "device_uuid": existing_node.device_uuid,
+                    "device_name": existing_node.device_name,
+                    "device_model": existing_node.device_model
+                }
+        
         raise HTTPException(
             status_code=500,
             detail=f"Registration failed: {str(e)}"

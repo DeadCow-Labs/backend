@@ -131,11 +131,23 @@ class NodeCreate(BaseModel):
     current_model_id: str | None = None
 
 class NodeResponse(BaseModel):
-    nodes: List[Node]
+    node_id: str
+    device_uuid: str
+    device_name: Optional[str] = None
+    device_model: Optional[str] = None
+    status: str
+    current_model_id: Optional[str] = None
+    last_heartbeat: datetime
+    created_at: datetime
 
     class Config:
         from_attributes = True
-        arbitrary_types_allowed = True
+
+class NodeListResponse(BaseModel):
+    nodes: List[NodeResponse]
+
+    class Config:
+        from_attributes = True
 
 @app.post("/nodes/register")
 async def register_node(registration: NodeRegistration, db: Session = Depends(get_db)):
@@ -256,7 +268,7 @@ async def node_heartbeat(node_id: str, db: Session = Depends(get_db)):
     db.commit()
     return {"status": "ok"}
 
-@app.get("/nodes/available", response_model=NodeResponse)
+@app.get("/nodes/available", response_model=NodeListResponse)
 @handle_db_error
 async def get_available_nodes(db: Session = Depends(get_db)):
     """Get list of available nodes"""
@@ -267,9 +279,11 @@ async def get_available_nodes(db: Session = Depends(get_db)):
             .filter(Node.last_heartbeat >= five_minutes_ago)\
             .all()
         
-        return NodeResponse(nodes=nodes)
+        node_responses = [NodeResponse.from_orm(node) for node in nodes]
+        return NodeListResponse(nodes=node_responses)
     
     except Exception as e:
+        print(f"Error in get_available_nodes: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Database error: {str(e)}"

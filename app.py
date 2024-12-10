@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, HTTPException, Depends
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Depends
 from sqlalchemy import create_engine, Column, String, Float, DateTime, ForeignKey, LargeBinary
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from typing import List
@@ -20,7 +20,7 @@ app = FastAPI()
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # Add your frontend URL
+    allow_origins=["http://localhost:3000", "https://dashboard.deadcow.xyz", "https://deadcow.xyz"],  # Add your frontend URL
     allow_credentials=True,
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
@@ -149,9 +149,9 @@ async def register_node(registration: NodeRegistration, db: Session = Depends(ge
     }
 @app.post("/models/upload")
 async def upload_model(
-    model_file: UploadFile,
-    name: str,
-    owner_address: str,
+    model_file: UploadFile = File(...),
+    name: str = Form(...),
+    owner_address: str = Form(...),
     db: Session = Depends(get_db)
 ):
     """Handle model upload and distribution"""

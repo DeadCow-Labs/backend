@@ -1,5 +1,5 @@
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Depends
-from sqlalchemy import create_engine, Column, String, Float, DateTime, ForeignKey, LargeBinary
+from sqlalchemy import create_engine, Column, String, Float, DateTime, ForeignKey, LargeBinary, text
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from typing import List, Optional
@@ -51,7 +51,8 @@ def get_db_engine():
         pool_pre_ping=True,
         pool_recycle=3600,
         pool_size=5,
-        max_overflow=10
+        max_overflow=10,
+        echo=True
     )
 
 # Database setup
@@ -123,7 +124,7 @@ def get_db():
     db = SessionLocal()
     try:
         # Test the connection
-        db.execute("SELECT 1")
+        db.execute(text("SELECT 1"))
         yield db
     except Exception as e:
         print(f"Database connection error: {str(e)}")
@@ -193,6 +194,7 @@ async def register_node(
             .first()
         
         if existing_node:
+            print(f"Found existing node: {existing_node.node_id}")
             existing_node.last_heartbeat = datetime.utcnow()
             existing_node.status = "available"
             db.commit()
@@ -204,6 +206,7 @@ async def register_node(
         
         # Create new node
         node_id = str(uuid.uuid4())
+        print(f"Creating new node: {node_id}")
         new_node = Node(
             node_id=node_id,
             device_uuid=registration.device_uuid,
@@ -215,7 +218,8 @@ async def register_node(
         
         db.add(new_node)
         db.commit()
-        
+        print(f"Successfully created node: {node_id}")
+
         return {
             "node_id": node_id,
             "status": "registered"
@@ -223,8 +227,12 @@ async def register_node(
         
     except Exception as e:
         print(f"Registration error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Registration failed: {str(e)}"
+        )
+    
 @app.post("/models/upload")
 @handle_db_error
 async def upload_model(

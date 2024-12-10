@@ -28,9 +28,35 @@ app.add_middleware(
 )
 
 
+def get_db_engine():
+    DATABASE_URL = os.getenv("DATABASE_URL")
+    ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
+    
+    # Configure connection arguments based on environment
+    if ENVIRONMENT == "production":
+        connect_args = {
+            "sslmode": "require",
+            "connect_timeout": 30
+        }
+    else:
+        # Local development - no SSL
+        connect_args = {
+            "connect_timeout": 30
+        }
+    
+    # Create engine with appropriate config
+    return create_engine(
+        DATABASE_URL,
+        connect_args=connect_args,
+        pool_pre_ping=True,
+        pool_recycle=3600,
+        pool_size=5,
+        max_overflow=10
+    )
+
 # Database setup
 DATABASE_URL = os.getenv("DATABASE_URL")
-engine = create_engine(DATABASE_URL)
+engine = get_db_engine()
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -96,7 +122,13 @@ Base.metadata.create_all(bind=engine)
 def get_db():
     db = SessionLocal()
     try:
+        # Test the connection
+        db.execute("SELECT 1")
         yield db
+    except Exception as e:
+        print(f"Database connection error: {str(e)}")
+        db.rollback()
+        raise
     finally:
         db.close()
 
@@ -104,23 +136,11 @@ def handle_db_error(func):
     async def wrapper(*args, **kwargs):
         try:
             return await func(*args, **kwargs)
-        except OperationalError as e:
-            print(f"Database operational error: {str(e)}")
-            raise HTTPException(
-                status_code=503,
-                detail="Database connection error. Please try again later."
-            )
-        except SQLAlchemyError as e:
-            print(f"Database error: {str(e)}")
-            raise HTTPException(
-                status_code=500,
-                detail="Database error occurred."
-            )
         except Exception as e:
-            print(f"Unexpected error: {str(e)}")
+            print(f"Database error in {func.__name__}: {str(e)}")
             raise HTTPException(
                 status_code=500,
-                detail="An unexpected error occurred."
+                detail=f"Database error: {str(e)}"
             )
     return wrapper
 
@@ -150,6 +170,7 @@ class NodeListResponse(BaseModel):
         from_attributes = True
 
 @app.post("/nodes/register")
+@handle_db_error
 async def register_node(registration: NodeRegistration, db: Session = Depends(get_db)):
     """Register a new iPhone node"""
     # Check if device already exists

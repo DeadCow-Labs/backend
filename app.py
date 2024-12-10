@@ -135,6 +135,7 @@ class NodeResponse(BaseModel):
 
     class Config:
         from_attributes = True
+        arbitrary_types_allowed = True
 
 @app.post("/nodes/register")
 async def register_node(registration: NodeRegistration, db: Session = Depends(get_db)):

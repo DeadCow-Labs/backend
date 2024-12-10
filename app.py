@@ -169,44 +169,62 @@ class NodeListResponse(BaseModel):
     class Config:
         from_attributes = True
 
+from pydantic import BaseModel
+from typing import Optional
+from fastapi import FastAPI, HTTPException
+
+class NodeRegistration(BaseModel):
+    device_uuid: str
+    device_name: Optional[str] = None
+    device_model: Optional[str] = None
+
 @app.post("/nodes/register")
-@handle_db_error
-async def register_node(registration: NodeRegistration, db: Session = Depends(get_db)):
+async def register_node(
+    registration: NodeRegistration,  # This expects JSON in request body
+    db: Session = Depends(get_db)
+):
     """Register a new iPhone node"""
-    # Check if device already exists
-    existing_node = db.query(Node)\
-        .filter(Node.device_uuid == registration.device_uuid)\
-        .first()
-    
-    if existing_node:
-        # Update last heartbeat and return existing node_id
-        existing_node.last_heartbeat = datetime.utcnow()
-        existing_node.status = "available"  # Reset status to available
+    try:
+        print(f"Received registration: {registration}")
+        
+        # Check if device exists
+        existing_node = db.query(Node)\
+            .filter(Node.device_uuid == registration.device_uuid)\
+            .first()
+        
+        if existing_node:
+            existing_node.last_heartbeat = datetime.utcnow()
+            existing_node.status = "available"
+            db.commit()
+            
+            return {
+                "node_id": existing_node.node_id,
+                "status": "already_registered"
+            }
+        
+        # Create new node
+        node_id = str(uuid.uuid4())
+        new_node = Node(
+            node_id=node_id,
+            device_uuid=registration.device_uuid,
+            device_name=registration.device_name,
+            device_model=registration.device_model,
+            status="available",
+            last_heartbeat=datetime.utcnow()
+        )
+        
+        db.add(new_node)
         db.commit()
-        return {"node_id": existing_node.node_id, "status": "already_registered"}
-    
-    # Create new node if device doesn't exist
-    node_id = str(uuid.uuid4())
-    db_node = Node(
-        node_id=node_id,
-        device_uuid=registration.device_uuid,
-        device_name=registration.device_name,
-        device_model=registration.device_model,
-        status="available",
-        last_heartbeat=datetime.utcnow()
-    )
-    
-    db.add(db_node)
-    db.commit()
-    db.refresh(db_node)
-    
-    return {
-        "node_id": node_id,
-        "status": "new_registration",
-        "device_uuid": registration.device_uuid,
-        "device_model": registration.device_model,
-        "device_name": registration.device_name
-    }
+        
+        return {
+            "node_id": node_id,
+            "status": "registered"
+        }
+        
+    except Exception as e:
+        print(f"Registration error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/models/upload")
 @handle_db_error
 async def upload_model(

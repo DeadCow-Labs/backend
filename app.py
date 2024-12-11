@@ -160,7 +160,6 @@ class Model(Base):
     __tablename__ = "models"
     
     model_id = Column(String, primary_key=True)
-    model_data = Column(LargeBinary)  # Store model binary directly in DB
     name = Column(String, nullable=False)
     filename = Column(String)
     status = Column(String)  # uploaded, deployed, failed

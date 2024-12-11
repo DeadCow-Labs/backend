@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Depends
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Depends, Request
 from sqlalchemy import create_engine, Column, String, Float, DateTime, ForeignKey, LargeBinary, text
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
@@ -9,10 +9,11 @@ import time
 from datetime import datetime, timedelta
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
-from fastapi.responses import Response
+from fastapi.responses import Response,JSONResponse
 import json
 import asyncio
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
 
 load_dotenv()
 
@@ -79,7 +80,6 @@ class NodeInfo(BaseModel):
 
     class Config:
         from_attributes = True
-
 
 class ModelInfo(BaseModel):
     model_id: str
@@ -168,6 +168,15 @@ class Model(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 Base.metadata.create_all(bind=engine)
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    print(f"Validation error: {str(exc)}")
+    return JSONResponse(
+        status_code=422,
+        content={"detail": str(exc)}
+    )
+
 
 # Dependency
 def get_db():

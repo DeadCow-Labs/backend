@@ -14,6 +14,7 @@ import json
 import asyncio
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
+from functools import wraps
 
 load_dotenv()
 
@@ -193,6 +194,7 @@ def get_db():
         db.close()
 
 def handle_db_error(func):
+    @wraps(func)
     async def wrapper(*args, **kwargs):
         try:
             return await func(*args, **kwargs)

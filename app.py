@@ -343,7 +343,17 @@ async def upload_model(
     model_id = str(uuid.uuid4())
     
     # Read model file
-    model_data = await model_file.read()
+    file_size = model_file.size / (1024 * 1024)  # Convert bytes to MB
+    # model_data = await model_file.read()
+    
+    file_content = await model_file.read()
+
+    app.state.model_uploads = getattr(app.state, 'model_uploads', {})
+    app.state.model_uploads[model_id] = {
+        'content': file_content,
+        'filename': model_file.filename,
+        'expiry': datetime.utcnow() + timedelta(minutes=5)  # Clean up after 5 minutes
+    }
     
     # Find available node
     five_minutes_ago = datetime.utcnow() - timedelta(minutes=5)
@@ -359,11 +369,11 @@ async def upload_model(
     db_model = Model(
         model_id=model_id,
         name=name,
-        model_data=model_data,
         filename=model_file.filename,
         status="deployed",  # Will be changed to "downloaded" when node gets it
         node_id=available_node.node_id,
-        owner_address=owner_address
+        owner_address=owner_address,
+        file_size=file_size
     )
     
     db.add(db_model)
@@ -390,16 +400,24 @@ async def get_owner_models(owner_address: str, db: Session = Depends(get_db)):
 
 @app.get("/models/{model_id}/download")
 async def get_model(model_id: str, db: Session = Depends(get_db)):
-    """Download model directly from database"""
+    """Download model directly from node"""
     model = db.query(Model).filter(Model.model_id == model_id).first()
     if not model:
         raise HTTPException(status_code=404, detail="Model not found")
     
+    model_upload = getattr(app.state, 'model_uploads', {}).get(model_id)
+    if not model_upload or datetime.utcnow() > model_upload['expiry']:
+        raise HTTPException(status_code=404, detail="Model file no longer available for download. Please upload again.")
+    
+    content = model_upload['content']
+    filename = model_upload['filename']
+    app.state.model_uploads.pop(model_id, None)
+    
     return Response(
-        content=model.model_data,
+        content=content,
         media_type="application/octet-stream",
         headers={
-            "Content-Disposition": f"attachment; filename={model.filename}"
+            "Content-Disposition": f"attachment; filename={filename}"
         }
     )
 
@@ -558,3 +576,20 @@ async def run_text_inference(
             status_code=500, 
             detail=f"Text generation error: {str(e)}"
         )
+
+@app.on_event("startup")
+async def setup_upload_cleanup():
+    async def cleanup_old_uploads():
+        while True:
+            await asyncio.sleep(300)  # Run every 5 minutes
+            now = datetime.utcnow()
+            if hasattr(app.state, 'model_uploads'):
+                expired = [
+                    model_id for model_id, data 
+                    in app.state.model_uploads.items() 
+                    if now > data['expiry']
+                ]
+                for model_id in expired:
+                    app.state.model_uploads.pop(model_id, None)
+    
+    asyncio.create_task(cleanup_old_uploads())

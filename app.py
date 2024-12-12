@@ -166,7 +166,8 @@ class Model(Base):
     node_id = Column(String, ForeignKey("nodes.node_id"), nullable=True)
     owner_address = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
-
+    file_size = Column(Float, nullable=True)
+    
 Base.metadata.create_all(bind=engine)
 
 @app.exception_handler(RequestValidationError)

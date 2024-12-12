@@ -28,6 +28,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
+    max_age=3600,
 )
 
 
@@ -354,16 +355,62 @@ async def upload_model(
     
     # Read model file
     file_size = model_file.size / (1024 * 1024)  # Convert bytes to MB
+    print(f"Uploading file of size: {file_size:.2f}MB")
+
+    try:
+        model_id = str(uuid.uuid4())
+        
+        # Read file in chunks to avoid memory issues
+        chunk_size = 1024 * 1024  # 1MB chunks
+        content = bytearray()
+        
+        while True:
+            chunk = await model_file.read(chunk_size)
+            if not chunk:
+                break
+            content.extend(chunk)
+        
+        app.state.model_uploads = getattr(app.state, 'model_uploads', {})
+        app.state.model_uploads[model_id] = {
+            'content': bytes(content),
+            'filename': model_file.filename,
+            'expiry': datetime.utcnow() + timedelta(minutes=5)
+        }
+        
+        node = db.query(Node).first()
+
+    # Create model record
+        db_model = Model(
+        model_id=model_id,
+        name=name,
+        filename=model_file.filename,
+        status="deployed",  # Will be changed to "downloaded" when node gets it
+        # node_id=available_node.node_id,
+        node_id=node.node_id,
+        owner_address=owner_address,
+        file_size=file_size
+        )
+    
+        db.add(db_model)
+        db.commit()
+        return ModelUploadResponse(
+        model_id=model_id,
+        name=name,
+        # node_id=available_node.node_id,
+        node_id=node.node_id,
+        status="assigned",
+        owner_address=owner_address
+    )
     # model_data = await model_file.read()
     
-    file_content = await model_file.read()
+    # file_content = await model_file.read()
 
-    app.state.model_uploads = getattr(app.state, 'model_uploads', {})
-    app.state.model_uploads[model_id] = {
-        'content': file_content,
-        'filename': model_file.filename,
-        'expiry': datetime.utcnow() + timedelta(minutes=5)  # Clean up after 5 minutes
-    }
+    # app.state.model_uploads = getattr(app.state, 'model_uploads', {})
+    # app.state.model_uploads[model_id] = {
+    #     'content': file_content,
+    #     'filename': model_file.filename,
+    #     'expiry': datetime.utcnow() + timedelta(minutes=5)  # Clean up after 5 minutes
+    # }
     
     # Find available node
     # five_minutes_ago = datetime.utcnow() - timedelta(minutes=5)
@@ -374,31 +421,14 @@ async def upload_model(
     
     # if not available_node:
     #     raise HTTPException(status_code=503, detail="No available nodes")
-    node = db.query(Node).first()
-
-    # Create model record
-    db_model = Model(
-        model_id=model_id,
-        name=name,
-        filename=model_file.filename,
-        status="deployed",  # Will be changed to "downloaded" when node gets it
-        # node_id=available_node.node_id,
-        node_id=node.node_id,
-        owner_address=owner_address,
-        file_size=file_size
-    )
     
-    db.add(db_model)
-    db.commit()
-    
-    return ModelUploadResponse(
-        model_id=model_id,
-        name=name,
-        # node_id=available_node.node_id,
-        node_id=node.node_id,
-        status="assigned",
-        owner_address=owner_address
-    )
+    except Exception as e:
+            print(f"Upload error: {str(e)}")
+            app.state.model_uploads.pop(model_id, None)  # Cleanup on error
+            raise HTTPException(
+                status_code=500,
+                detail=f"Upload failed: {str(e)}"
+            )
 
 @app.get("/models/owner/{owner_address}", response_model=List[ModelInfo])
 @handle_db_error

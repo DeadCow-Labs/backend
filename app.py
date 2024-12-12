@@ -342,6 +342,16 @@ async def upload_model(
     """Handle model upload and distribution"""
     model_id = str(uuid.uuid4())
     
+    node = db.query(Node)\
+        .filter(Node.status == "available")\
+        .first()
+    
+    if not node:
+        raise HTTPException(
+            status_code=503, 
+            detail="No available nodes found. Please ensure a node is registered and active."
+        )
+    
     # Read model file
     file_size = model_file.size / (1024 * 1024)  # Convert bytes to MB
     # model_data = await model_file.read()

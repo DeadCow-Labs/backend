@@ -167,7 +167,7 @@ class Model(Base):
     owner_address = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     file_size = Column(Float, nullable=True)
-    
+
 Base.metadata.create_all(bind=engine)
 
 @app.exception_handler(RequestValidationError)
@@ -356,22 +356,24 @@ async def upload_model(
     }
     
     # Find available node
-    five_minutes_ago = datetime.utcnow() - timedelta(minutes=5)
-    available_node = db.query(Node)\
-        .filter(Node.status == "available")\
-        .filter(Node.last_heartbeat >= five_minutes_ago)\
-        .first()
+    # five_minutes_ago = datetime.utcnow() - timedelta(minutes=5)
+    # available_node = db.query(Node)\
+    #     .filter(Node.status == "available")\
+    #     .filter(Node.last_heartbeat >= five_minutes_ago)\
+    #     .first()
     
-    if not available_node:
-        raise HTTPException(status_code=503, detail="No available nodes")
-    
+    # if not available_node:
+    #     raise HTTPException(status_code=503, detail="No available nodes")
+    node = db.query(Node).first()
+
     # Create model record
     db_model = Model(
         model_id=model_id,
         name=name,
         filename=model_file.filename,
         status="deployed",  # Will be changed to "downloaded" when node gets it
-        node_id=available_node.node_id,
+        # node_id=available_node.node_id,
+        node_id=node.node_id,
         owner_address=owner_address,
         file_size=file_size
     )
@@ -382,7 +384,8 @@ async def upload_model(
     return ModelUploadResponse(
         model_id=model_id,
         name=name,
-        node_id=available_node.node_id,
+        # node_id=available_node.node_id,
+        node_id=node.node_id,
         status="assigned",
         owner_address=owner_address
     )

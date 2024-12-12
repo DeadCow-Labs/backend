@@ -401,29 +401,77 @@ async def get_owner_models(owner_address: str, db: Session = Depends(get_db)):
     
     return models
 
+# @app.get("/models/{model_id}/download")
+# async def get_model(model_id: str, db: Session = Depends(get_db)):
+#     """Download model directly from node"""
+#     model = db.query(Model).filter(Model.model_id == model_id).first()
+#     if not model:
+#         raise HTTPException(status_code=404, detail="Model not found")
+    
+#     model_upload = getattr(app.state, 'model_uploads', {}).get(model_id)
+#     if not model_upload or datetime.utcnow() > model_upload['expiry']:
+#         raise HTTPException(status_code=404, detail="Model file no longer available for download. Please upload again.")
+    
+#     content = model_upload['content']
+#     filename = model_upload['filename']
+#     app.state.model_uploads.pop(model_id, None)
+    
+#     return Response(
+#         content=content,
+#         media_type="application/octet-stream",
+#         headers={
+#             "Content-Disposition": f"attachment; filename={filename}"
+#         }
+#     )
+
 @app.get("/models/{model_id}/download")
 async def get_model(model_id: str, db: Session = Depends(get_db)):
     """Download model directly from node"""
+    # First check if model exists in temporary storage
+    model_upload = getattr(app.state, 'model_uploads', {}).get(model_id)
+    if not model_upload:
+        raise HTTPException(
+            status_code=404, 
+            detail="Model file not found in temporary storage"
+        )
+    
+    # Check if model has expired
+    if datetime.utcnow() > model_upload['expiry']:
+        # Clean up expired model
+        app.state.model_uploads.pop(model_id, None)
+        raise HTTPException(
+            status_code=404, 
+            detail="Model file has expired. Please upload again."
+        )
+    
+    # Verify model exists in database
     model = db.query(Model).filter(Model.model_id == model_id).first()
     if not model:
-        raise HTTPException(status_code=404, detail="Model not found")
+        raise HTTPException(
+            status_code=404, 
+            detail="Model not found in database"
+        )
     
-    model_upload = getattr(app.state, 'model_uploads', {}).get(model_id)
-    if not model_upload or datetime.utcnow() > model_upload['expiry']:
-        raise HTTPException(status_code=404, detail="Model file no longer available for download. Please upload again.")
-    
-    content = model_upload['content']
-    filename = model_upload['filename']
-    app.state.model_uploads.pop(model_id, None)
-    
-    return Response(
-        content=content,
-        media_type="application/octet-stream",
-        headers={
-            "Content-Disposition": f"attachment; filename={filename}"
-        }
-    )
-
+    try:
+        content = model_upload['content']
+        filename = model_upload['filename']
+        
+        # Remove from temporary storage after successful access
+        app.state.model_uploads.pop(model_id, None)
+        
+        return Response(
+            content=content,
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Length": str(len(content))
+            }
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail="Error serving model file"
+        )
 @app.post("/nodes/{node_id}/heartbeat")
 @handle_db_error
 async def node_heartbeat(node_id: str, db: Session = Depends(get_db)):
@@ -471,6 +519,11 @@ async def check_node_assignment(node_id: str, db: Session = Depends(get_db)):
         .first()
     
     if not assigned_model:
+        return NoModelResponse()
+    
+    model_upload = getattr(app.state, 'model_uploads', {}).get(assigned_model.model_id)
+    if not model_upload or datetime.utcnow() > model_upload['expiry']:
+        # Model file no longer available
         return NoModelResponse()
     
     return ModelReadyResponse(

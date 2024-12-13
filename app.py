@@ -17,6 +17,7 @@ from fastapi.exceptions import RequestValidationError
 from functools import wraps
 from tempfile import NamedTemporaryFile
 import shutil
+import requests
 
 load_dotenv()
 
@@ -209,6 +210,11 @@ def handle_db_error(func):
             )
     return wrapper
 
+def construct_node_url(node_id: str) -> str:
+    """Construct the URL for a node using its ID."""
+    base_domain = "https://api.deadcow.xyz"  # Use HTTPS in production
+    return f"{base_domain}/nodes/{node_id}/download_model"
+
 # Pydantic models
 class NodeCreate(BaseModel):
     node_id: str
@@ -249,6 +255,7 @@ class RegistrationResponse(BaseModel):
     device_uuid: str
     device_name: Optional[str] = None
     device_model: Optional[str] = None
+    node_url: Optional[str] = None
 
 
 @app.post("/nodes/register", response_model=RegistrationResponse)
@@ -268,8 +275,10 @@ async def register_node(registration: NodeRegistration, db: Session = Depends(ge
             # Update existing node
             existing_node.last_heartbeat = datetime.utcnow()
             existing_node.status = "available"
-            existing_node.device_name = registration.device_name  # Update name if changed
-            existing_node.device_model = registration.device_model  # Update model if changed
+            existing_node.device_name = registration.device_name
+            existing_node.device_model = registration.device_model
+            existing_node.node_url = construct_node_url(existing_node.node_id)
+
             db.commit()
             
             return RegistrationResponse(
@@ -277,7 +286,8 @@ async def register_node(registration: NodeRegistration, db: Session = Depends(ge
                 status="already_registered",
                 device_uuid=existing_node.device_uuid,
                 device_name=existing_node.device_name,
-                device_model=existing_node.device_model
+                device_model=existing_node.device_model,
+                node_url=registration.node_url
             )
         
         # If no existing node, create new one
@@ -290,7 +300,8 @@ async def register_node(registration: NodeRegistration, db: Session = Depends(ge
             device_name=registration.device_name,
             device_model=registration.device_model,
             status="available",
-            last_heartbeat=datetime.utcnow()
+            last_heartbeat=datetime.utcnow(),
+            node_url=construct_node_url(node_id)
         )
         
         try:
@@ -303,7 +314,8 @@ async def register_node(registration: NodeRegistration, db: Session = Depends(ge
                 status="registered",
                 device_uuid=registration.device_uuid,
                 device_name=registration.device_name,
-                device_model=registration.device_model
+                device_model=registration.device_model,
+                node_url=construct_node_url(node_id)
             )
             
         except Exception as e:
@@ -621,7 +633,7 @@ async def check_node_assignment(node_id: str, db: Session = Depends(get_db)):
         return NoModelResponse()
     
     model_upload = getattr(app.state, 'model_uploads', {}).get(assigned_model.model_id)
-    if not model_upload or datetime.utcnow() > model_upload['expiry']:
+    if not model_upload:
         # Model file no longer available
         return NoModelResponse()
     
@@ -732,6 +744,60 @@ async def run_text_inference(
             detail=f"Text generation error: {str(e)}"
         )
 
+@app.post("/models/upload_and_assign", response_model=ModelUploadResponse)
+@handle_db_error
+async def upload_and_assign_model(
+    model_file: UploadFile = File(...),
+    name: str = Form(...),
+    owner_address: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    """Upload model and assign to a node"""
+    model_id = str(uuid.uuid4())
+    
+    try:
+        # Create a temporary file
+        with NamedTemporaryFile(delete=False) as temp_file:
+            shutil.copyfileobj(model_file.file, temp_file)
+            temp_file_path = temp_file.name
+        
+        # Store file path in temporary storage
+        app.state.model_uploads = getattr(app.state, 'model_uploads', {})
+        app.state.model_uploads[model_id] = {
+            'file_path': temp_file_path,
+            'filename': model_file.filename,
+            'expiry': datetime.utcnow() + timedelta(minutes=5)
+        }
+        
+        # Get any available node
+        node = db.query(Node)\
+            .filter(Node.status == "available")\
+            .first()
+        
+        if not node:
+            os.unlink(temp_file_path)
+            raise HTTPException(status_code=503, detail="No nodes available")
+      
+        notify_node_to_download(node.node_id, model_id)
+        
+        # Directly return the response without storing in the database
+        return ModelUploadResponse(
+            model_id=model_id,
+            name=name,
+            node_id=node.node_id,
+            status="assigned",
+            owner_address=owner_address
+        )
+        
+    except Exception as e:
+        if 'temp_file_path' in locals():
+            try:
+                os.unlink(temp_file_path)
+            except:
+                pass
+        app.state.model_uploads.pop(model_id, None)
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.on_event("startup")
 async def setup_upload_cleanup():
     async def cleanup_old_uploads():
@@ -748,3 +814,26 @@ async def setup_upload_cleanup():
                     app.state.model_uploads.pop(model_id, None)
     
     asyncio.create_task(cleanup_old_uploads())
+
+# def notify_node_to_download(node_id: str, model_id: str, db: Session):
+#     """Notify the node to download the model"""
+#     # Implement a notification mechanism, e.g., WebSocket, HTTP request, etc.
+#     # For example, send an HTTP request to the node's endpoint
+#     node = db.query(Node).filter(Node.node_id == node_id).first()
+#     if not node:
+#         print(f"Node {node_id} not found or URL not set")
+#         raise HTTPException(status_code=404, detail="Node not found or URL not set")
+#     try:
+#         response = requests.post(node.node_url, json={"model_id": model_id})
+#         response.raise_for_status()
+#     except Exception as e:
+#         print(f"Failed to notify node {node_id}: {str(e)}")
+def notify_node_to_download(node_id: str, model_id: str):
+         """Notify the node to download the model"""
+         try:
+             node_url = f"http://localhost:5000/nodes/{node_id}/download_model"
+             response = requests.post(node_url, json={"model_id": model_id})
+             response.raise_for_status()
+             print(f"Successfully notified node {node_id} to download model {model_id}")
+         except requests.exceptions.RequestException as e:
+             print(f"Failed to notify node {node_id}: {str(e)}")

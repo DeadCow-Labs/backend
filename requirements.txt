@@ -8,3 +8,4 @@ gunicorn
 fastapi-cors
 pydantic
 asyncio
+requests

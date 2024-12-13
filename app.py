@@ -839,3 +839,35 @@ def notify_node_to_download(node_id: str, model_id: str, file_path: str):
              print(f"Successfully notified node {node_id} to download model {model_id}")
          except requests.exceptions.RequestException as e:
              print(f"Failed to notify node {node_id}: {str(e)}")
+
+@app.post("/models/upload_and_forward")
+async def upload_and_forward_model(
+    model_file: UploadFile = File(...),
+    name: str = Form(...),
+    owner_address: str = Form(...)
+):
+    try:
+        # Save the model file temporarily
+        with NamedTemporaryFile(delete=False) as temp_file:
+            shutil.copyfileobj(model_file.file, temp_file)
+            temp_file_path = temp_file.name
+            print(f"Model saved to temporary path: {temp_file_path}")
+
+        # Forward the model to the node
+        node_url = "https://faf3-190-210-38-133.ngrok-free.app/nodes/download_model"  # Use your ngrok URL here
+        with open(temp_file_path, 'rb') as f:
+            files = {'model_file': f}
+            data = {'name': name, 'owner_address': owner_address}
+            response = requests.post(node_url, files=files, data=data)
+            response.raise_for_status()
+
+        return {"status": "success", "message": "Model forwarded to node"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        # Clean up the temporary file
+        if 'temp_file_path' in locals():
+            try:
+                os.unlink(temp_file_path)
+            except:
+                pass

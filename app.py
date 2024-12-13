@@ -831,7 +831,8 @@ async def setup_upload_cleanup():
 def notify_node_to_download(node_id: str, model_id: str):
          """Notify the node to download the model"""
          try:
-             node_url = f"http://localhost:5000/nodes/{node_id}/download_model"
+            #  node_url = f"http://localhost:8000/nodes/{node_id}/download_model"
+             node_url = f"https://2e72-190-210-38-133.ngrok-free.app/nodes/{node_id}/download_model"
              response = requests.post(node_url, json={"model_id": model_id})
              response.raise_for_status()
              print(f"Successfully notified node {node_id} to download model {model_id}")

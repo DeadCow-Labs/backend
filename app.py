@@ -15,6 +15,8 @@ import asyncio
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from functools import wraps
+from tempfile import NamedTemporaryFile
+import shutil
 
 load_dotenv()
 
@@ -343,64 +345,110 @@ async def upload_model(
     """Handle model upload and distribution"""
     model_id = str(uuid.uuid4())
     
-    node = db.query(Node)\
-        .filter(Node.status == "available")\
-        .first()
-    
-    if not node:
-        raise HTTPException(
-            status_code=503, 
-            detail="No available nodes found. Please ensure a node is registered and active."
-        )
-    
-    # Read model file
-    file_size = model_file.size / (1024 * 1024)  # Convert bytes to MB
-    print(f"Uploading file of size: {file_size:.2f}MB")
-
     try:
-        model_id = str(uuid.uuid4())
+        # Create a temporary file
+        with NamedTemporaryFile(delete=False) as temp_file:
+            # Copy uploaded file to temporary file
+            shutil.copyfileobj(model_file.file, temp_file)
+            temp_file_path = temp_file.name
         
-        # Read file in chunks to avoid memory issues
-        chunk_size = 1024 * 1024  # 1MB chunks
-        content = bytearray()
-        
-        while True:
-            chunk = await model_file.read(chunk_size)
-            if not chunk:
-                break
-            content.extend(chunk)
-        
+        # Store file path instead of content
         app.state.model_uploads = getattr(app.state, 'model_uploads', {})
         app.state.model_uploads[model_id] = {
-            'content': bytes(content),
+            'file_path': temp_file_path,
             'filename': model_file.filename,
             'expiry': datetime.utcnow() + timedelta(minutes=5)
         }
         
-        node = db.query(Node).first()
-
-    # Create model record
-        db_model = Model(
-        model_id=model_id,
-        name=name,
-        filename=model_file.filename,
-        status="deployed",  # Will be changed to "downloaded" when node gets it
-        # node_id=available_node.node_id,
-        node_id=node.node_id,
-        owner_address=owner_address,
-        file_size=file_size
-        )
+        # Get any available node
+        node = db.query(Node)\
+            .filter(Node.status == "available")\
+            .first()
     
+        if not node:
+            # Clean up temp file
+            os.unlink(temp_file_path)
+            raise HTTPException(status_code=503, detail="No nodes available")
+
+        db_model = Model(
+            model_id=model_id,
+            name=name,
+            filename=model_file.filename,
+            status="deployed",
+            node_id=node.node_id,
+            owner_address=owner_address,
+            file_size=os.path.getsize(temp_file_path) / (1024 * 1024)  # Size in MB
+        )
+        
         db.add(db_model)
         db.commit()
+        
         return ModelUploadResponse(
-        model_id=model_id,
-        name=name,
-        # node_id=available_node.node_id,
-        node_id=node.node_id,
-        status="assigned",
-        owner_address=owner_address
-    )
+            model_id=model_id,
+            name=name,
+            node_id=node.node_id,
+            status="assigned",
+            owner_address=owner_address
+        )
+        
+    except Exception as e:
+        # Clean up on error
+        if 'temp_file_path' in locals():
+            try:
+                os.unlink(temp_file_path)
+            except:
+                pass
+        app.state.model_uploads.pop(model_id, None)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Read model file
+    # file_size = model_file.size / (1024 * 1024)  # Convert bytes to MB
+    # print(f"Uploading file of size: {file_size:.2f}MB")
+
+    # try:
+    #     model_id = str(uuid.uuid4())
+        
+    #     # Read file in chunks to avoid memory issues
+    #     chunk_size = 1024 * 1024  # 1MB chunks
+    #     content = bytearray()
+        
+    #     while True:
+    #         chunk = await model_file.read(chunk_size)
+    #         if not chunk:
+    #             break
+    #         content.extend(chunk)
+        
+    #     app.state.model_uploads = getattr(app.state, 'model_uploads', {})
+    #     app.state.model_uploads[model_id] = {
+    #         'content': bytes(content),
+    #         'filename': model_file.filename,
+    #         'expiry': datetime.utcnow() + timedelta(minutes=5)
+    #     }
+        
+    #     node = db.query(Node).first()
+
+    # # Create model record
+    #     db_model = Model(
+    #     model_id=model_id,
+    #     name=name,
+    #     filename=model_file.filename,
+    #     status="deployed",  # Will be changed to "downloaded" when node gets it
+    #     # node_id=available_node.node_id,
+    #     node_id=node.node_id,
+    #     owner_address=owner_address,
+    #     file_size=file_size
+    #     )
+    
+    #     db.add(db_model)
+    #     db.commit()
+    #     return ModelUploadResponse(
+    #     model_id=model_id,
+    #     name=name,
+    #     # node_id=available_node.node_id,
+    #     node_id=node.node_id,
+    #     status="assigned",
+    #     owner_address=owner_address
+    # )
     # model_data = await model_file.read()
     
     # file_content = await model_file.read()
@@ -422,13 +470,6 @@ async def upload_model(
     # if not available_node:
     #     raise HTTPException(status_code=503, detail="No available nodes")
     
-    except Exception as e:
-            print(f"Upload error: {str(e)}")
-            app.state.model_uploads.pop(model_id, None)  # Cleanup on error
-            raise HTTPException(
-                status_code=500,
-                detail=f"Upload failed: {str(e)}"
-            )
 
 @app.get("/models/owner/{owner_address}", response_model=List[ModelInfo])
 @handle_db_error
@@ -478,40 +519,58 @@ async def get_model(model_id: str, db: Session = Depends(get_db)):
     # Check if model has expired
     if datetime.utcnow() > model_upload['expiry']:
         # Clean up expired model
+        try:
+            os.unlink(model_upload['file_path'])
+        except:
+            pass
         app.state.model_uploads.pop(model_id, None)
         raise HTTPException(
             status_code=404, 
             detail="Model file has expired. Please upload again."
         )
+
+    file_path = model_upload['file_path']
+    filename = model_upload['filename']
     
-    # Verify model exists in database
-    model = db.query(Model).filter(Model.model_id == model_id).first()
-    if not model:
-        raise HTTPException(
-            status_code=404, 
-            detail="Model not found in database"
-        )
-    
-    try:
-        content = model_upload['content']
-        filename = model_upload['filename']
-        
-        # Remove from temporary storage after successful access
+    async def file_streamer():
+        with open(file_path, 'rb') as f:
+            while chunk := f.read(8192):  # 8KB chunks
+                yield chunk
+        # Clean up after streaming
+        os.unlink(file_path)
         app.state.model_uploads.pop(model_id, None)
+    
+    return Response(
+        file_streamer(),
+        media_type='application/octet-stream',
+        headers={
+            'Content-Disposition': f'attachment; filename="{filename}"'
+        }
+    )
+    # Verify model exists in database
+    # model = db.query(Model).filter(Model.model_id == model_id).first()
+    # if not model:
+    #     raise HTTPException(
+    #         status_code=404, 
+    #         detail="Model not found in database"
+    #     )
+    
+    # try:
+    #     content = model_upload['content']
+    #     filename = model_upload['filename']
         
-        return Response(
-            content=content,
-            media_type="application/octet-stream",
-            headers={
-                "Content-Disposition": f'attachment; filename="{filename}"',
-                "Content-Length": str(len(content))
-            }
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail="Error serving model file"
-        )
+    #     # Remove from temporary storage after successful access
+    #     app.state.model_uploads.pop(model_id, None)
+        
+    #     return Response(
+    #         content=content,
+    #         media_type="application/octet-stream",
+    #         headers={
+    #             "Content-Disposition": f'attachment; filename="{filename}"',
+    #             "Content-Length": str(len(content))
+    #         }
+    #     )
+
 @app.post("/nodes/{node_id}/heartbeat")
 @handle_db_error
 async def node_heartbeat(node_id: str, db: Session = Depends(get_db)):

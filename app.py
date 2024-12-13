@@ -760,14 +760,15 @@ async def upload_and_assign_model(
         with NamedTemporaryFile(delete=False) as temp_file:
             shutil.copyfileobj(model_file.file, temp_file)
             temp_file_path = temp_file.name
-        
+            print(f"Model saved to temporary path: {temp_file_path}")
+
         # Store file path in temporary storage
-        app.state.model_uploads = getattr(app.state, 'model_uploads', {})
-        app.state.model_uploads[model_id] = {
-            'file_path': temp_file_path,
-            'filename': model_file.filename,
-            'expiry': datetime.utcnow() + timedelta(minutes=5)
-        }
+        # app.state.model_uploads = getattr(app.state, 'model_uploads', {})
+        # app.state.model_uploads[model_id] = {
+        #     'file_path': temp_file_path,
+        #     'filename': model_file.filename,
+        #     'expiry': datetime.utcnow() + timedelta(minutes=5)
+        # }
         
         # Get any available node
         node = db.query(Node)\
@@ -778,7 +779,7 @@ async def upload_and_assign_model(
             os.unlink(temp_file_path)
             raise HTTPException(status_code=503, detail="No nodes available")
       
-        notify_node_to_download(node.node_id, model_id)
+        notify_node_to_download(node.node_id, model_id,temp_file_path)
         
         # Directly return the response without storing in the database
         return ModelUploadResponse(
@@ -828,12 +829,12 @@ async def setup_upload_cleanup():
 #         response.raise_for_status()
 #     except Exception as e:
 #         print(f"Failed to notify node {node_id}: {str(e)}")
-def notify_node_to_download(node_id: str, model_id: str):
+def notify_node_to_download(node_id: str, model_id: str, file_path: str):
          """Notify the node to download the model"""
          try:
             #  node_url = f"http://localhost:8000/nodes/{node_id}/download_model"
              node_url = f"https://2e72-190-210-38-133.ngrok-free.app/nodes/{node_id}/download_model"
-             response = requests.post(node_url, json={"model_id": model_id})
+             response = requests.post(node_url, json={"model_id": model_id, "file_path": file_path})
              response.raise_for_status()
              print(f"Successfully notified node {node_id} to download model {model_id}")
          except requests.exceptions.RequestException as e:

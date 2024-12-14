@@ -12,5 +12,4 @@ requests
 cryptography
 torch
 concrete
-pickle
 numpy

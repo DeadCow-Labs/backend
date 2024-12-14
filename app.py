@@ -18,6 +18,11 @@ from functools import wraps
 from tempfile import NamedTemporaryFile
 import shutil
 import requests
+from cryptography.fernet import Fernet
+import torch
+
+key = Fernet.generate_key()
+cipher = Fernet(key)
 
 load_dotenv()
 
@@ -840,6 +845,35 @@ def notify_node_to_download(node_id: str, model_id: str, file_path: str):
          except requests.exceptions.RequestException as e:
              print(f"Failed to notify node {node_id}: {str(e)}")
 
+def encrypt_model_file(model_path):
+    # Read the model file
+    with open(model_path, 'rb') as file:
+        model_data = file.read()
+
+    # Encrypt the model data
+    encrypted_model_data = cipher.encrypt(model_data)
+
+    # Save the encrypted model to a new file
+    encrypted_model_path = model_path + '.enc'
+    with open(encrypted_model_path, 'wb') as file:
+        file.write(encrypted_model_data)
+
+    return encrypted_model_path
+
+def decrypt_model_file(encrypted_model_path):
+    # Read the encrypted model file
+    with open(encrypted_model_path, 'rb') as file:
+        encrypted_model_data = file.read()
+
+    # Decrypt the model data
+    model_data = cipher.decrypt(encrypted_model_data)
+
+    # Save the decrypted model to a new file
+    model_path = encrypted_model_path.replace('.enc', '')
+    with open(model_path, 'wb') as file:
+        file.write(model_data)
+
+    return model_path
 @app.post("/models/upload_and_forward")
 async def upload_and_forward_model(
     model_file: UploadFile = File(...),
@@ -853,9 +887,12 @@ async def upload_and_forward_model(
             temp_file_path = temp_file.name
             print(f"Model saved to temporary path: {temp_file_path}")
 
+        encrypted_model_path = encrypt_model_file(temp_file_path)
+
         # Forward the model to the node
         node_url = "https://faf3-190-210-38-133.ngrok-free.app/nodes/download_model"  # Use your ngrok URL here
-        with open(temp_file_path, 'rb') as f:
+        # with open(temp_file_path, 'rb') as f:
+        with open(encrypted_model_path, 'rb') as f:
             files = {'model_file': f}
             data = {'name': name, 'owner_address': owner_address}
             response = requests.post(node_url, files=files, data=data)

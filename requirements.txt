@@ -9,3 +9,5 @@ fastapi-cors
 pydantic
 asyncio
 requests
+cryptography
+torch

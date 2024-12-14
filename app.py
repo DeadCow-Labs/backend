@@ -921,7 +921,7 @@ def decrypt_model_file(encrypted_model_data):
 
 #         encrypted_model = serialize_and_encrypt_model(compiled_model)
 #         # Forward the model to the node
-#         node_url = "https://faf3-190-210-38-133.ngrok-free.app/nodes/download_model"  # Use your ngrok URL here
+#         node_url = "https://5a22-186-125-134-194.ngrok-free.app/nodes/download_model"  # Use your ngrok URL here
 #         # with open(temp_file_path, 'rb') as f:
 
 #         response = requests.post(node_url, data={"model": encrypted_model, "name": name, "owner_address": owner_address})
@@ -955,7 +955,7 @@ async def upload_and_forward_model(
             print(f"Model saved to temporary path: {temp_file_path}")
 
         # Forward the model to the node
-        node_url = "https://faf3-190-210-38-133.ngrok-free.app/nodes/upload_model"  # Replace with actual node URL
+        node_url = "https://5a22-186-125-134-194.ngrok-free.app/nodes/upload_model"  # Replace with actual node URL
         with open(temp_file_path, 'rb') as f:
             response = requests.post(node_url, files={"model_file": f}, data={"name": name, "owner_address": owner_address})
             response.raise_for_status()
@@ -975,7 +975,7 @@ async def upload_and_forward_model(
 def fetch_and_compile_model():
     global compiled_model
     # Fetch the encrypted model from the node
-    node_url = "https://faf3-190-210-38-133.ngrok-free.app/nodes/get_model"  # Replace with actual node URL
+    node_url = "https://5a22-186-125-134-194.ngrok-free.app/nodes/get_model"  # Replace with actual node URL
     response = requests.get(node_url)
     response.raise_for_status()
     model_data = response.content
@@ -1011,7 +1011,7 @@ async def run_model(request: Request):
         encrypted_input = compiled_model.fhe_circuit.encrypt(input_array)
 
         # Send the encrypted input to the node for inference
-        node_url = "https://faf3-190-210-38-133.ngrok-free.app/nodes/run_inference"  # Replace with actual node URL
+        node_url = "https://5a22-186-125-134-194.ngrok-free.app/nodes/run_inference"  # Replace with actual node URL
         response = requests.post(node_url, json={"encrypted_input": encrypted_input})
         response.raise_for_status()
 

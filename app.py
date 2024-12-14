@@ -902,6 +902,45 @@ def decrypt_model_file(encrypted_model_data):
     return model_data
 
 
+# @app.post("/models/upload_and_forward")
+# async def upload_and_forward_model(
+#     model_file: UploadFile = File(...),
+#     name: str = Form(...),
+#     owner_address: str = Form(...)
+# ):
+#     try:
+#         # Save the model file temporarily
+#         with NamedTemporaryFile(delete=False) as temp_file:
+#             shutil.copyfileobj(model_file.file, temp_file)
+#             temp_file_path = temp_file.name
+#             print(f"Model saved to temporary path: {temp_file_path}")
+       
+
+#         quantized_model = load_and_quantize_model(temp_file_path)
+#         compiled_model = compile_model_for_fhe(quantized_model)
+
+#         encrypted_model = serialize_and_encrypt_model(compiled_model)
+#         # Forward the model to the node
+#         node_url = "https://faf3-190-210-38-133.ngrok-free.app/nodes/download_model"  # Use your ngrok URL here
+#         # with open(temp_file_path, 'rb') as f:
+
+#         response = requests.post(node_url, data={"model": encrypted_model, "name": name, "owner_address": owner_address})
+#         response.raise_for_status()
+
+#         return {"status": "success", "message": "Compiled model encrypted and forwarded to node securely."}
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
+#     finally:
+#         # Clean up the temporary file
+#         if 'temp_file_path' in locals():
+#             try:
+#                 os.unlink(temp_file_path)
+#             except:
+#                 pass
+
+# compiled_model = None
+
+
 @app.post("/models/upload_and_forward")
 async def upload_and_forward_model(
     model_file: UploadFile = File(...),
@@ -914,22 +953,17 @@ async def upload_and_forward_model(
             shutil.copyfileobj(model_file.file, temp_file)
             temp_file_path = temp_file.name
             print(f"Model saved to temporary path: {temp_file_path}")
-       
 
-        quantized_model = load_and_quantize_model(temp_file_path)
-        compiled_model = compile_model_for_fhe(quantized_model)
-
-        encrypted_model = serialize_and_encrypt_model(compiled_model)
         # Forward the model to the node
-        node_url = "https://faf3-190-210-38-133.ngrok-free.app/nodes/download_model"  # Use your ngrok URL here
-        # with open(temp_file_path, 'rb') as f:
+        node_url = "https://faf3-190-210-38-133.ngrok-free.app/nodes/upload_model"  # Replace with actual node URL
+        with open(temp_file_path, 'rb') as f:
+            response = requests.post(node_url, files={"model_file": f}, data={"name": name, "owner_address": owner_address})
+            response.raise_for_status()
 
-        response = requests.post(node_url, data={"model": encrypted_model, "name": name, "owner_address": owner_address})
-        response.raise_for_status()
-
-        return {"status": "success", "message": "Compiled model encrypted and forwarded to node securely."}
+        return {"status": "success", "message": "Model forwarded to node successfully."}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"Error during model upload and forward: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error during model upload and forward: {str(e)}")
     finally:
         # Clean up the temporary file
         if 'temp_file_path' in locals():
@@ -938,21 +972,18 @@ async def upload_and_forward_model(
             except:
                 pass
 
-compiled_model = None
-
 def fetch_and_compile_model():
     global compiled_model
     # Fetch the encrypted model from the node
     node_url = "https://faf3-190-210-38-133.ngrok-free.app/nodes/get_model"  # Replace with actual node URL
     response = requests.get(node_url)
     response.raise_for_status()
-    encrypted_model_data = response.content
+    model_data = response.content
 
     # Decrypt the model
-    model_data = cipher.decrypt(encrypted_model_data)
 
     # Deserialize the model
-    model = pickle.loads(model_data)
+    model = torch.load(model_data)
 
     # Quantize and compile the model for FHE
     quantized_model = quantize_dynamic(model, {torch.nn.Linear}, dtype=torch.qint8)
@@ -961,11 +992,10 @@ def fetch_and_compile_model():
 
 @app.post("/run")
 async def run_model(request: Request):
-    fetch_and_compile_model()
     try:
-        # Ensure compiled_model is initialized
+        # Fetch and compile the model if not already done
         if compiled_model is None:
-            raise HTTPException(status_code=500, detail="Model not initialized")
+            fetch_and_compile_model()
 
         # Receive plain input data from the client
         request_data = await request.json()

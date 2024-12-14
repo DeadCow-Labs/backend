@@ -11,5 +11,5 @@ asyncio
 requests
 cryptography
 torch
-concrete
+concrete-ml
 numpy

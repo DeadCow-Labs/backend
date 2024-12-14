@@ -19,7 +19,11 @@ from tempfile import NamedTemporaryFile
 import shutil
 import requests
 from cryptography.fernet import Fernet
+import pickle
 import torch
+from concrete.ml.sklearn import LogisticRegression
+from torch.quantization import quantize_dynamic
+import numpy as np
 
 key = Fernet.generate_key()
 cipher = Fernet(key)
@@ -845,35 +849,59 @@ def notify_node_to_download(node_id: str, model_id: str, file_path: str):
          except requests.exceptions.RequestException as e:
              print(f"Failed to notify node {node_id}: {str(e)}")
 
-def encrypt_model_file(model_path):
-    # Read the model file
-    with open(model_path, 'rb') as file:
-        model_data = file.read()
+def serialize_and_encrypt_model(compiled_model):
+    # Serialize the compiled model
+    serialized_model = pickle.dumps(compiled_model)
 
-    # Encrypt the model data
-    encrypted_model_data = cipher.encrypt(model_data)
+    # Encrypt the serialized model
+    encrypted_model = cipher.encrypt(serialized_model)
 
-    # Save the encrypted model to a new file
-    encrypted_model_path = model_path + '.enc'
-    with open(encrypted_model_path, 'wb') as file:
-        file.write(encrypted_model_data)
+    return encrypted_model
 
-    return encrypted_model_path
+def decrypt_and_deserialize_model(encrypted_model):
+    # Decrypt the model
+    decrypted_model = cipher.decrypt(encrypted_model)
 
-def decrypt_model_file(encrypted_model_path):
-    # Read the encrypted model file
-    with open(encrypted_model_path, 'rb') as file:
-        encrypted_model_data = file.read()
+    # Deserialize the model
+    compiled_model = pickle.loads(decrypted_model)
 
+    return compiled_model
+
+# def decrypt_model_file(encrypted_model_path):
+#     # Read the encrypted model file
+#     with open(encrypted_model_path, 'rb') as file:
+#         encrypted_model_data = file.read()
+
+#     # Decrypt the model data
+#     model_data = cipher.decrypt(encrypted_model_data)
+
+#     # Save the decrypted model to a new file
+#     model_path = encrypted_model_path.replace('.enc', '')
+#     with open(model_path, 'wb') as file:
+#         file.write(model_data)
+
+#     return model_path
+
+def load_and_quantize_model(model_path):
+    # Load your PyTorch model
+    model = torch.load(model_path)
+    # Quantize the model
+    quantized_model = quantize_dynamic(model, {torch.nn.Linear}, dtype=torch.qint8)
+    return quantized_model
+
+# Compile the model for FHE
+def compile_model_for_fhe(quantized_model):
+    # Example using Concrete ML
+    compiled_model = LogisticRegression(n_bits=8)
+    compiled_model.compile(quantized_model)
+    return compiled_model
+
+def decrypt_model_file(encrypted_model_data):
     # Decrypt the model data
     model_data = cipher.decrypt(encrypted_model_data)
+    return model_data
 
-    # Save the decrypted model to a new file
-    model_path = encrypted_model_path.replace('.enc', '')
-    with open(model_path, 'wb') as file:
-        file.write(model_data)
 
-    return model_path
 @app.post("/models/upload_and_forward")
 async def upload_and_forward_model(
     model_file: UploadFile = File(...),
@@ -886,19 +914,20 @@ async def upload_and_forward_model(
             shutil.copyfileobj(model_file.file, temp_file)
             temp_file_path = temp_file.name
             print(f"Model saved to temporary path: {temp_file_path}")
+       
 
-        encrypted_model_path = encrypt_model_file(temp_file_path)
+        quantized_model = load_and_quantize_model(temp_file_path)
+        compiled_model = compile_model_for_fhe(quantized_model)
 
+        encrypted_model = serialize_and_encrypt_model(compiled_model)
         # Forward the model to the node
         node_url = "https://faf3-190-210-38-133.ngrok-free.app/nodes/download_model"  # Use your ngrok URL here
         # with open(temp_file_path, 'rb') as f:
-        with open(encrypted_model_path, 'rb') as f:
-            files = {'model_file': f}
-            data = {'name': name, 'owner_address': owner_address}
-            response = requests.post(node_url, files=files, data=data)
-            response.raise_for_status()
 
-        return {"status": "success", "message": "Model forwarded to node"}
+        response = requests.post(node_url, data={"model": encrypted_model, "name": name, "owner_address": owner_address})
+        response.raise_for_status()
+
+        return {"status": "success", "message": "Compiled model encrypted and forwarded to node securely."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
@@ -908,3 +937,65 @@ async def upload_and_forward_model(
                 os.unlink(temp_file_path)
             except:
                 pass
+
+compiled_model = None
+
+def fetch_and_compile_model():
+    global compiled_model
+    # Fetch the encrypted model from the node
+    node_url = "https://faf3-190-210-38-133.ngrok-free.app/nodes/get_model"  # Replace with actual node URL
+    response = requests.get(node_url)
+    response.raise_for_status()
+    encrypted_model_data = response.content
+
+    # Decrypt the model
+    model_data = cipher.decrypt(encrypted_model_data)
+
+    # Deserialize the model
+    model = pickle.loads(model_data)
+
+    # Quantize and compile the model for FHE
+    quantized_model = quantize_dynamic(model, {torch.nn.Linear}, dtype=torch.qint8)
+    compiled_model = LogisticRegression(n_bits=8)
+    compiled_model.compile(quantized_model)
+
+@app.post("/run")
+async def run_model(request: Request):
+    fetch_and_compile_model()
+    try:
+        # Ensure compiled_model is initialized
+        if compiled_model is None:
+            raise HTTPException(status_code=500, detail="Model not initialized")
+
+        # Receive plain input data from the client
+        request_data = await request.json()
+        input_data = request_data.get("input_data")
+
+        if input_data is None:
+            raise HTTPException(status_code=400, detail="Input data not provided")
+
+        # Convert input data to numpy array
+        input_array = np.array([ord(char) for char in input_data])
+
+        # Encrypt the input data using the FHE circuit
+        encrypted_input = compiled_model.fhe_circuit.encrypt(input_array)
+
+        # Send the encrypted input to the node for inference
+        node_url = "https://faf3-190-210-38-133.ngrok-free.app/nodes/run_inference"  # Replace with actual node URL
+        response = requests.post(node_url, json={"encrypted_input": encrypted_input})
+        response.raise_for_status()
+
+        # Receive the encrypted output from the node
+        encrypted_output = response.json().get("encrypted_output")
+
+        if not encrypted_output:
+            raise HTTPException(status_code=500, detail="Failed to receive encrypted output from node")
+
+        # Decrypt the output
+        decrypted_result = compiled_model.fhe_circuit.decrypt(encrypted_output)
+
+        # Return the decrypted result to the client
+        return JSONResponse(content={"result": decrypted_result.tolist()})
+    except Exception as e:
+        print(f"Error during inference: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error during inference: {str(e)}")

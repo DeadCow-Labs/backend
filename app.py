@@ -904,7 +904,7 @@ def decrypt_model_file(encrypted_model_data):
 
 # @app.post("/models/upload_and_forward")
 # async def upload_and_forward_model(
-#     model_file: UploadFile = File(...),
+#     model_file: UploadFile = File(...),/r
 #     name: str = Form(...),
 #     owner_address: str = Form(...)
 # ):
@@ -992,13 +992,50 @@ def fetch_and_compile_model():
     compiled_model = LogisticRegression(n_bits=8)
     compiled_model.compile(quantized_model)
 
+# @app.post("/run")
+# async def run_model(request: Request):
+#     try:
+#         # Fetch and compile the model if not already done
+#         if compiled_model is None:
+#             fetch_and_compile_model()
+
+#         # Receive plain input data from the client
+#         request_data = await request.json()
+#         input_data = request_data.get("input_data")
+
+#         if input_data is None:
+#             raise HTTPException(status_code=400, detail="Input data not provided")
+
+#         # Convert input data to numpy array
+#         input_array = np.array([ord(char) for char in input_data])
+
+#         # Encrypt the input data using the FHE circuit
+#         encrypted_input = compiled_model.fhe_circuit.encrypt(input_array)
+
+#         # Send the encrypted input to the node for inference
+#         node_url = "https://5a22-186-125-134-194.ngrok-free.app/nodes/run_inference"  # Replace with actual node URL
+#         response = requests.post(node_url, json={"encrypted_input": encrypted_input})
+#         response.raise_for_status()
+
+#         # Receive the encrypted output from the node
+#         encrypted_output = response.json().get("encrypted_output")
+
+#         if not encrypted_output:
+#             raise HTTPException(status_code=500, detail="Failed to receive encrypted output from node")
+
+#         # Decrypt the output
+#         decrypted_result = compiled_model.fhe_circuit.decrypt(encrypted_output)
+
+#         # Return the decrypted result to the client
+#         return JSONResponse(content={"result": decrypted_result.tolist()})
+#     except Exception as e:
+#         print(f"Error during inference: {str(e)}")
+#         raise HTTPException(status_code=500, detail=f"Error during inference: {str(e)}")
+
+
 @app.post("/run")
 async def run_model(request: Request):
     try:
-        # Fetch and compile the model if not already done
-        if compiled_model is None:
-            fetch_and_compile_model()
-
         # Receive plain input data from the client
         request_data = await request.json()
         input_data = request_data.get("input_data")
@@ -1006,28 +1043,17 @@ async def run_model(request: Request):
         if input_data is None:
             raise HTTPException(status_code=400, detail="Input data not provided")
 
-        # Convert input data to numpy array
-        input_array = np.array([ord(char) for char in input_data])
-
-        # Encrypt the input data using the FHE circuit
-        encrypted_input = compiled_model.fhe_circuit.encrypt(input_array)
-
-        # Send the encrypted input to the node for inference
-        node_url = "https://5a22-186-125-134-194.ngrok-free.app/nodes/run_inference"  # Replace with actual node URL
-        response = requests.post(node_url, json={"encrypted_input": encrypted_input})
+        # Send the input data directly to the node for inference
+        node_url = "https://5a22-186-125-134-194.ngrok-free.app/nodes/run_inference"  # Replace with actual node URL if different
+        response = requests.post(node_url, json={"input_data": input_data})
         response.raise_for_status()
 
-        # Receive the encrypted output from the node
-        encrypted_output = response.json().get("encrypted_output")
+        # Receive the output from the node
+        node_response = response.json()
 
-        if not encrypted_output:
-            raise HTTPException(status_code=500, detail="Failed to receive encrypted output from node")
-
-        # Decrypt the output
-        decrypted_result = compiled_model.fhe_circuit.decrypt(encrypted_output)
-
-        # Return the decrypted result to the client
-        return JSONResponse(content={"result": decrypted_result.tolist()})
-    except Exception as e:
+        # Return the result to the client
+        return JSONResponse(content=node_response)
+    except requests.exceptions.RequestException as e:
         print(f"Error during inference: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error during inference: {str(e)}")
+    

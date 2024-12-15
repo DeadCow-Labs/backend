@@ -825,19 +825,6 @@ async def setup_upload_cleanup():
     
     asyncio.create_task(cleanup_old_uploads())
 
-# def notify_node_to_download(node_id: str, model_id: str, db: Session):
-#     """Notify the node to download the model"""
-#     # Implement a notification mechanism, e.g., WebSocket, HTTP request, etc.
-#     # For example, send an HTTP request to the node's endpoint
-#     node = db.query(Node).filter(Node.node_id == node_id).first()
-#     if not node:
-#         print(f"Node {node_id} not found or URL not set")
-#         raise HTTPException(status_code=404, detail="Node not found or URL not set")
-#     try:
-#         response = requests.post(node.node_url, json={"model_id": model_id})
-#         response.raise_for_status()
-#     except Exception as e:
-#         print(f"Failed to notify node {node_id}: {str(e)}")
 def notify_node_to_download(node_id: str, model_id: str, file_path: str):
          """Notify the node to download the model"""
          try:
@@ -867,20 +854,6 @@ def decrypt_and_deserialize_model(encrypted_model):
 
     return compiled_model
 
-# def decrypt_model_file(encrypted_model_path):
-#     # Read the encrypted model file
-#     with open(encrypted_model_path, 'rb') as file:
-#         encrypted_model_data = file.read()
-
-#     # Decrypt the model data
-#     model_data = cipher.decrypt(encrypted_model_data)
-
-#     # Save the decrypted model to a new file
-#     model_path = encrypted_model_path.replace('.enc', '')
-#     with open(model_path, 'wb') as file:
-#         file.write(model_data)
-
-#     return model_path
 
 def load_and_quantize_model(model_path):
     # Load your PyTorch model
@@ -900,46 +873,6 @@ def decrypt_model_file(encrypted_model_data):
     # Decrypt the model data
     model_data = cipher.decrypt(encrypted_model_data)
     return model_data
-
-
-# @app.post("/models/upload_and_forward")
-# async def upload_and_forward_model(
-#     model_file: UploadFile = File(...),/r
-#     name: str = Form(...),
-#     owner_address: str = Form(...)
-# ):
-#     try:
-#         # Save the model file temporarily
-#         with NamedTemporaryFile(delete=False) as temp_file:
-#             shutil.copyfileobj(model_file.file, temp_file)
-#             temp_file_path = temp_file.name
-#             print(f"Model saved to temporary path: {temp_file_path}")
-       
-
-#         quantized_model = load_and_quantize_model(temp_file_path)
-#         compiled_model = compile_model_for_fhe(quantized_model)
-
-#         encrypted_model = serialize_and_encrypt_model(compiled_model)
-#         # Forward the model to the node
-#         node_url = "https://5a22-186-125-134-194.ngrok-free.app/nodes/download_model"  # Use your ngrok URL here
-#         # with open(temp_file_path, 'rb') as f:
-
-#         response = requests.post(node_url, data={"model": encrypted_model, "name": name, "owner_address": owner_address})
-#         response.raise_for_status()
-
-#         return {"status": "success", "message": "Compiled model encrypted and forwarded to node securely."}
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=str(e))
-#     finally:
-#         # Clean up the temporary file
-#         if 'temp_file_path' in locals():
-#             try:
-#                 os.unlink(temp_file_path)
-#             except:
-#                 pass
-
-# compiled_model = None
-
 
 @app.post("/models/upload_and_forward")
 async def upload_and_forward_model(
@@ -991,47 +924,6 @@ def fetch_and_compile_model():
     quantized_model = quantize_dynamic(model, {torch.nn.Linear}, dtype=torch.qint8)
     compiled_model = LogisticRegression(n_bits=8)
     compiled_model.compile(quantized_model)
-
-# @app.post("/run")
-# async def run_model(request: Request):
-#     try:
-#         # Fetch and compile the model if not already done
-#         if compiled_model is None:
-#             fetch_and_compile_model()
-
-#         # Receive plain input data from the client
-#         request_data = await request.json()
-#         input_data = request_data.get("input_data")
-
-#         if input_data is None:
-#             raise HTTPException(status_code=400, detail="Input data not provided")
-
-#         # Convert input data to numpy array
-#         input_array = np.array([ord(char) for char in input_data])
-
-#         # Encrypt the input data using the FHE circuit
-#         encrypted_input = compiled_model.fhe_circuit.encrypt(input_array)
-
-#         # Send the encrypted input to the node for inference
-#         node_url = "https://5a22-186-125-134-194.ngrok-free.app/nodes/run_inference"  # Replace with actual node URL
-#         response = requests.post(node_url, json={"encrypted_input": encrypted_input})
-#         response.raise_for_status()
-
-#         # Receive the encrypted output from the node
-#         encrypted_output = response.json().get("encrypted_output")
-
-#         if not encrypted_output:
-#             raise HTTPException(status_code=500, detail="Failed to receive encrypted output from node")
-
-#         # Decrypt the output
-#         decrypted_result = compiled_model.fhe_circuit.decrypt(encrypted_output)
-
-#         # Return the decrypted result to the client
-#         return JSONResponse(content={"result": decrypted_result.tolist()})
-#     except Exception as e:
-#         print(f"Error during inference: {str(e)}")
-#         raise HTTPException(status_code=500, detail=f"Error during inference: {str(e)}")
-
 
 @app.post("/run")
 async def run_model(request: Request):

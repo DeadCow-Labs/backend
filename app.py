@@ -972,6 +972,8 @@ async def upload_and_forward_model(
             except:
                 pass
 
+compiled_model = None
+
 def fetch_and_compile_model():
     global compiled_model
     # Fetch the encrypted model from the node
